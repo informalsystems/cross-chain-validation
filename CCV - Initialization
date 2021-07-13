@@ -1,0 +1,175 @@
+# Initialization
+
+This documents tackles the initialization part of the cross-chain validation (CCV) protocol.
+Namely, we need to ensure that (1) parent blockchain communicates with baby blockchain, (2) baby blockchain communicates with parent blockchain, and (3) these two blockchains communicate via a single channel.
+
+We start by properly defining the properties of the initialization subprotocol.
+Then, we provide the pseudocode and prove its correctness.
+
+## Problem Definition
+
+We assume that babyChain denotes the baby blockchain the parent blockchain wants to validate.
+Similarly, parentChain denotes the parent blockchain which validates the baby blockchain, from the perspective of the baby blockchain.
+
+The initialization exposes the following interface:
+- Indication <Open, channel>: channel is open.
+
+We ensure the following properties:
+
+- **Parent Safety:** If <Open, channel> is triggered at parent blockchain, then channel is a channel between the parent and baby blockchain. [satisfied if the parent blockchain is "valid"]
+
+- **Baby Safety:** If <Open, channel> is triggered at baby blockchain, then channel is a channel between the parent and baby blockchain. [satisfied if the baby blockchain is "valid"]
+
+- **Channel Safety:** If <Open, channel> is triggered at parent blockchain and <Open, channel'> is triggered at baby blockchain, these channel = channel'.  [satisfied if both blockchains are "valid"]
+
+- **No Duplication:** A blockchain triggers <Open, channel> at most once. [satisfied if the blockchain is "valid"]
+
+- **Liveness:** A blockchain eventually triggers <Open, channel>. [satisfied if both blockchains are "valid"]
+
+## Protocol
+
+### Prerequisites
+
+This subsection presents the state of both chains we assume at the start of the initialization subprotocol.
+There exists a light client on the baby blockchain that follows the parent blockchain (denoted by BABY_LIGHT_CLIENT) and there exists a light client on the parent blockchain that follows the baby blockchain (denoted by PARENT_LIGHT_CLIENT).
+We assume that both light clients are updated, i.e., they contain the initial consensus state of the corresponding blockchain.
+
+### Parent Blockchain
+
+```
+upon <OnChanOpenTry, Order order, String portId, String channelId, Counterparty counterparty, String version, String counterpartyVersion>:
+    // validate parameters, i.e., check whether order = "ORDERED", portId is the expected port, version is the expected version
+    if (!validate(order, portId, channelId, version)):
+        trigger <error>
+
+    // check whether the version of the counterparty is the expected one
+    if (counterpartyVersion != expectedCCVVersion):
+        trigger <error>
+
+    // create the channel, i.e., claim a capability
+    Channel channel = new Channel(portId, channelId)
+    // set its status to "INITIALIZING"
+    channel.setStatus("INITIALIZING")
+
+    // get the client
+    client = getClient(channelId)
+
+    // verify consensus state
+    verifyConsensusState(client, initialValidatorSetBaby)
+
+    // verify that there does not exist a CCV channel
+    if (ccvChannelBaby != nil):
+        trigger <error>
+```
+
+<<<<<<< HEAD
+- **Initiator:** Relayer.
+- **Expected precondition:** 
+    - ChanOpenTry datagram committed on the blockchain.
+- **Expected postcondition:**
+    - A channel is created; its status is set to "INITIALIZING".
+    - A consensus state of the baby blockchain is verified againts its initial validator set.
+- **Error condition:** 
+    - If the precondition is violated.
+=======
+- Expected precondition
+    - Handshake is started for establishing a channel
+- Expected postcondition
+    - A channel(portId, channelId) is created; its status is set to "INITIALIZING"
+- Error condition
+    - None
+>>>>>>> 05f5fa74de80232ada415671731dc39e6dd30947
+
+```
+upon <OnChanOpenConfirm, String portId, String channelId>:
+    // verify that there does not exist a CCV channel
+    if (ccvChannelBaby != nil):
+        // if there is, make it invalid and close it
+        ccvChannel.setStatus("INVALID")
+        ccvChannel.close()
+        trigger <error>
+    
+    // update the channel
+    ccvChannel = getChannel(channelId)
+    // make it valid
+    ccvChannel.setStatus("VALID")
+
+    // terminate
+    trigger <Open, ccvChannel>
+```
+
+- **Initiator:** Relayer.
+- **Expected precondition:** 
+    - ChanOpenConfirm datagram committed on the blockchain.
+- **Expected postcondition:**
+    - If this is the first OnChanOpenConfirm callback invoked, the paren blockchain terminates the initialization protocol with this channel (it sets its status to "VALID"); otherwise, the callback is ignored.
+- **Error condition:** 
+    - If the precondition is violated.
+
+### Baby Blockchain
+
+```
+upon <OnChanOpenInit, Order order, String portId, String channelId, Counterparty counterparty, String version:
+    // validate parameters, i.e., check whether order = "ORDERED", portId is the expected port, version is the expected version
+    if (!validate(order, portId, channelId, version)):
+        trigger <error>
+
+    // create the channel, i.e., claim a capability
+    Channel channel = new Channel(portId, channelId)
+    // set its status to "INITIALIZING"
+    channel.setStatus("INITIALIZING")
+
+    // get the client
+    client = getClient(channelId)
+
+    // verify that the client is the expected client
+    (client != expectedClient):
+        trigger <error>
+```
+- **Initiator:** CCV module on the baby blockchain.
+- **Expected precondition:** 
+    - Connection among two blockchains has already been established.
+- **Expected postcondition:**
+    - A channel is created; its status is set to "INITIALIZING".
+- **Error condition:** 
+    - If the precondition is violated.
+
+```
+upon <OnChanOpenAck, String portId, String channelId, String counterpartyVersion>:
+    // check if this is the first acknowledged channel
+    if (alreadyAcknowledged):
+        triger <error>
+
+    // the first acknowledged channel
+    alreadyAcknowledged = true
+
+    // check the version of the counterparty
+    if (counterpartyVersion != expectedVersion): 
+        trigger <error>    
+    
+    trigger <Terminate, parentChain, getChannel(channelId)>
+```
+- **Initiator:** Relayer.
+- **Expected precondition:** 
+    - ChanOpenAck datagram committed on the blockchain.
+- **Expected postcondition:**
+    - If this is the first OnChanOpenAck callback invoked, the baby blockchain terminates the initialization protocol with this channel; otherwise, the callback is ignored.
+- **Error condition:** 
+    - If the precondition is violated.
+
+## Correctness Arguments
+
+- **Parent Safety:** This property is satisfied because the underlying client is the one expected and the consensus state of the baby blockchain is verified.
+
+- **Baby Safety:** This property is a consequence of the constantly updated light client of the parent blockchain on the baby blockchain.
+
+- **Channel Safety:** This property comes from the fact that the handshake process is done for channels that are started by the baby blockchain.
+
+- **No Duplication:** On the parent blockchain, the property is ensured because of the check about the existence of potentially confirmed ccv channel.
+On the baby blockchain, the property is ensured by the fact that just a single channel passes the "alreadyAcknowledged" check.
+
+<<<<<<< HEAD
+- **Liveness:** Ensured since the handshake is eventually completed.
+=======
+- **Liveness:** Ensured since eventually the handshake is completed.
+>>>>>>> 05f5fa74de80232ada415671731dc39e6dd30947
